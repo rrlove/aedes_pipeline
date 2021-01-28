@@ -1,0 +1,16 @@
+params.reads = null 
+if( !params.sample ) error "Missing sample parameter"
+println "sample: $params.sample"
+params.outdir = "${baseDir}/${prefix}"
+
+process initialQC {
+
+    module 'fastQC'
+
+"""
+
+"""
+
+}
+
+process trim
