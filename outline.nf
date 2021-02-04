@@ -184,52 +184,6 @@ process mark_dups{
 }
 
 /*
- * Base quality score recalibration
- * Tool: BaseRecalibrator
- * Input: output from bam_dups_marked_ch
- * Output: ...
-*/
-
-process base_qual_score_recal{
-
-}
-
-/*
- * Apply base quality score recalibration
- * Tool: ApplyBQSR
- * Input: output from base_qual_score_recal, bam_dups_marked_ch
- * Output: recal_bams
-*/
-
-process apply_BQSR{
-    tag "$pair_id"
-    
-    input:
-    
-    
-    output:
-    tuple(pair_id), path(recal_bam) into bam_recal_applied_ch
-
-
-}
-
-
-/*
- * Add read group
- * Tool: picard
- * Input: File...
- * Output: File...
- * do I actually need this one?
-*/
-
-
-
-process add_read_group{
-
-
-}
-
-/*
  * Call variants
  * Tool: GATK HaplotypeCaller
  * Input: file...?, reference
