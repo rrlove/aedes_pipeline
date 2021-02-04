@@ -93,7 +93,7 @@ process trim {
  * Post-trim quality check
  * Tool: fastqc
  * Input: Channel trimmed_reads_ch
- * Output: fastqc_post_trim_ch
+ * Output: Channel fastqc_post_trim_ch
 */
 
 process secondQC {
@@ -115,17 +115,27 @@ process secondQC {
 
 }
 
+/*
+ * Merge files from both lanes
+ * Tool: bash
+ * Input: Channel trimmed_reads_for_align_ch
+ * Output: Channel merged_reads_ch
+*/
+
+process mergereads {
+
+
+}
+
 
 /*
  * Align reads
  * Tool: bwa-mem
- * Input: Channel trimmed_reads_for_align_ch
+ * Input: Channel merged_reads_ch
  * Output: Channel aligned_bam_ch
 */
 
 // need to check for the genome index file, and if it doesn't exist, index it
-// do I want bwa mem or bwa-mem2?
-// both are available through conda
 
 process align {
     tag "$pair_id"
@@ -145,7 +155,6 @@ process align {
     bwa-mem2 \
     -R \// includes complete read groups
     -t 4 \
-    -M \// NB -M is unnecessary if we're not using Picard later in the pipeline
     ${ref} ${trimmed_reads} \ | samtools view -1bh > ${pair_id}.aligned.bam
     """
 
@@ -186,13 +195,19 @@ process mark_dups{
 /*
  * Call variants
  * Tool: GATK HaplotypeCaller
- * Input: file...?, reference
- * Output: File...
+ * Input: Channel bam_dups_marked_ch
+ * Output:
 */
 
 process call_variants{
     
     publishDir
+    
+    input:
+    tuple(pair_id), path(sorted_deduped_bam) from bam_dups_marked_ch
+    
+    output:
+    tuple(pair_id), path(genotyped_variants) into genotyped_variants_ch
 
     script:
     """
