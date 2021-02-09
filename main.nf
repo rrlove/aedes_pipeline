@@ -13,7 +13,8 @@
  * trimmomatic
  * bwa-mem2
  * gatk
- 
+ * picard
+ * qualimap
  */
 
 if( !params.reads ) error "Missing reads parameter"
@@ -58,7 +59,7 @@ Channel
 
 
 process initialQC {
-    publishDir "${outdir}/qc/fastqc"
+    publishDir "${outdir}qc/fastqc"
     tag "$sample_$lane"
     module 'fastqc'
     
@@ -84,7 +85,7 @@ Output: Channel trimmed_reads_for_qc_ch ; trimmed_reads_for_align_ch
 */
 
 process trim {
-    publishDir "${outdir}/data/trimmed_reads"
+    publishDir "${outdir}data/trimmed_reads"
     tag "$sample_$lane"
     module 'trimmomatic'
 
@@ -109,7 +110,7 @@ process trim {
 */
 
 process secondQC {
-    publishDir "${outdir}/qc/fastqc"
+    publishDir "${outdir}qc/fastqc"
     tag "$sample_$lane"
     module 'fastqc'
 
@@ -188,11 +189,11 @@ process extract_read_groups {
  * Align reads
  * Tool: bwa-mem2
  * Input: Channel rg_for_alignment_ch, Channel trimmed_reads_for_align_ch
- * Output: Channel aligned_reads
+ * Output: Channel aligned_reads_ch, Channel bam_for_qc_ch
 */
 
-process align_reads{
-    publishDir "${outdir}/data/bam"
+process align_reads {
+    publishDir "${outdir}data/bam"
     tag "$sample_$lane"
     cpus 4
     module 'samtools'
@@ -202,7 +203,8 @@ process align_reads{
     tuple val(sample), val(lane), val(read_group) from rg_for_alignment_ch
     
     output:
-    tuple val(sample). val(lane), file("${sample}_${lane}_aligned.bam") into aligned_reads
+    tuple val(sample), val(lane) into aligned_reads_names_ch
+    file("${sample}_${lane}_aligned.bam") into aligned_reads_ch
     
     """
     bwa-mem2 mem \
@@ -210,45 +212,44 @@ process align_reads{
     -t 4 \
     ${ref} ${trimmed_reads} | samtools view -1bh > ${sample}_${lane}_aligned.bam
     """
-
 }
 
-
+aligned_reads_ch
+    .collect()
+    //.flatten()
+    //.filter( Path )
+    .view()
+    .set { aligned_reads_path_ch }
 
 /*
- * Merge files from both lanes
- * Tool: bash
- * Input: Channel trimmed_reads_for_align_ch
- * Output: Channel merged_reads_ch
+ * Merge BAM files
+ * Tool: samtools
+ * Input: Channel aligned_reads
+ * Output: Channel merged_bam
+ * NB: this extra step is because of the difficulty in getting Picard to take multiple files from nextflow
 */
 
-/*
-process merge_reads {
-//where exactly do I want this? probably safest to merge bams...
 
-    publishDir "${outdir}/data/merged"
-    tag "$sample_$lane"
+process merge_reads {
+    publishDir "${outdir}data/bam"
+    tag "$sample"
+    module 'samtools'
     
     input:
-    tuple val(sample), val(lane), path(trimmed_reads) from trimmed_reads_for_align_ch
+    path(aligned_reads) from aligned_reads_path_ch
     
     output:
-    tuple val(sample), file("${sample}_trimmed_merged_{1,2}P.fq.gz") into merged_reads_ch, get_read_groups_ch
-    
-    script:
+    file("${sample}_merged.bam") into merged_reads_ch
     
     """
-    zcat ${sample}_*_trimmed_1P.fq.gz > ${sample}_trimmed_merged_1P.fq.gz
-    zcat ${sample}_*_trimmed_2P.fq.gz > ${sample}_trimmed_merged_2P.fq.gz
+    samtools merge ${sample}_merged.bam ${aligned_reads[0]} ${aligned_reads[1]}
     """
-
 }
-*/
 
 
 
 
-//NEED TO EXTRACT READ GROUPS
+//set up conda environment and remove "module" calls
 //make output not modifiable
 //validate choice of trimmomatic parameters
 
