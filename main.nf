@@ -3,7 +3,6 @@
  *
  * Author: RRLove < rrlove@email.unc.edu >
  * University of North Carolina Chapel Hill, 2021
-
 */
 
 
@@ -24,6 +23,7 @@ println "sample: $params.sample"
 ref = file(params.ref)
 println ref
 outdir = "${baseDir}/${params.sample}/"
+scratchdir = "/pine/scr/r/r/rrlove/aedes_pipeline/"
 println outdir
 adapter_dir = "/nas/longleaf/apps/trimmomatic/0.36/Trimmomatic-0.36/adapters/"
 sample = params.sample
@@ -61,7 +61,7 @@ Channel
 process initialQC {
     publishDir "${outdir}qc/fastqc"
     tag "$sample_$lane"
-    module 'fastqc'
+    //module 'fastqc'
     
     input: 
     tuple val(sample), val(lane), path(reads) from reads_for_qc_ch
@@ -87,7 +87,7 @@ Output: Channel trimmed_reads_for_qc_ch ; trimmed_reads_for_align_ch
 process trim {
     publishDir "${outdir}data/trimmed_reads"
     tag "$sample_$lane"
-    module 'trimmomatic'
+    //module 'trimmomatic'
 
     input: 
     tuple val(sample), val(lane), path(reads) from reads_for_trimming_ch
@@ -112,7 +112,7 @@ process trim {
 process secondQC {
     publishDir "${outdir}qc/fastqc"
     tag "$sample_$lane"
-    module 'fastqc'
+    //module 'fastqc'
 
     input: 
     tuple val(sample), val(lane), path(trimmed_reads) from trimmed_reads_for_qc_ch
@@ -196,14 +196,14 @@ process align_reads {
     publishDir "${outdir}data/bam"
     tag "$sample_$lane"
     cpus 4
-    module 'samtools'
+    memory "16G"
+    //module 'samtools'
     
     input:
     tuple val(sample), val(lane), path(trimmed_reads) from trimmed_reads_for_align_ch
     tuple val(sample), val(lane), val(read_group) from rg_for_alignment_ch
     
     output:
-    tuple val(sample), val(lane) into aligned_reads_names_ch
     file("${sample}_${lane}_aligned.bam") into aligned_reads_ch
     
     """
@@ -220,7 +220,7 @@ aligned_reads_ch
     //.filter( Path )
     .view()
     .set { aligned_reads_path_ch }
-
+    
 /*
  * Merge BAM files
  * Tool: samtools
@@ -229,25 +229,120 @@ aligned_reads_ch
  * NB: this extra step is because of the difficulty in getting Picard to take multiple files from nextflow
 */
 
-
 process merge_reads {
     publishDir "${outdir}data/bam"
     tag "$sample"
-    module 'samtools'
+    //module 'samtools'
     
     input:
     path(aligned_reads) from aligned_reads_path_ch
     
     output:
-    file("${sample}_merged.bam") into merged_reads_ch
+    tuple val(sample), file("${sample}_merged.bam") into merged_reads_ch
     
     """
-    samtools merge ${sample}_merged.bam ${aligned_reads[0]} ${aligned_reads[1]}
+    samtools merge ${sample}_merged.bam ${aligned_reads}
     """
 }
 
 
+/*
+ * Mark duplicates
+ * Tool: MarkDuplicatesSpark
+ * Input: Channel merged_reads_ch
+ * Output: Channel bam_dups_marked_ch
+*/
 
+process mark_dups {
+    publishDir "${outdir}data/bam"
+    tag "sample"
+    //module 'gatk'
+    //module 'samtools'
+    cpus 4
+    memory "16G"
+    
+    input: 
+    tuple val(sample), path(merged_bam) from merged_reads_ch
+    
+    output: 
+    tuple val(sample), file("${sample}_sorted_dedup.bam") into bam_dedup_merge_ch, bam_for_qc_ch
+    tuple val(sample), file("${sample}_sorted_dedup.bam.bai") into bam_index_ch
+
+    """
+    gatk MarkDuplicatesSpark \
+    -I ${merged_bam} \
+    -M ${sample}_dedup_metrics.txt \
+    -O ${sample}_sorted_dedup.bam    \
+    --conf 'spark.executor.cores=4'
+    
+    samtools index ${sample}_sorted_dedup.bam
+    """
+
+}
+
+/*
+ * Check the quality of the BAMs
+ * Tool: qualimap, picard
+ * Input: Channel bam_for_qc_ch
+ * Outout: Channel initial_bam_qc_ch
+*/
+
+process bam_qc{
+    publishDir "${outdir}qc/qualimap", pattern: '*stats*'
+    publishDir "${outdir}qc/picard", pattern: '*picard*'
+    tag "$sample"
+    memory "4G"
+    //module 'qualimap'
+    //module 'picard'
+    
+    input:
+    tuple val(sample), path(aligned_bam) from bam_for_qc_ch
+    
+    output:
+    tuple path("${sample}_sorted_dedup_stats*"), path("${sample}_picard_metrics*") into initial_bam_qc_ch
+
+    """
+    qualimap bamqc \
+    -bam ${aligned_bam} \
+    --java-mem-size=4G
+    
+    picard CollectMultipleMetrics \
+    -I ${aligned_bam} \
+    -O ${sample}_picard_metrics
+    """
+}
+
+/*
+ * Genotype variants in the specimen
+ * Tool: GATK
+ * Input: Channel bam_dedup_merge_ch
+ * Output: Channel genotyped_variants_ch, realigned_bam_ch
+*/
+
+process call_variants{
+    publishDir "${outdir}data/vcf", pattern: '*vcf*'
+    publishDir "${outdir}data/bam", pattern: '*bam*'
+    tag "$sample"
+    //module 'gatk'
+    memory "8G"
+    
+    input:
+    tuple val(sample), path(bam) from bam_dedup_merge_ch
+
+    output:
+    tuple val(sample), path("${sample}.g.vcf.gz") into genotyped_variants_ch
+    tuple val(sample), path("${sample}_realigned.bam") into realigned_bam_ch
+
+    script:
+    """
+    gatk HaplotypeCaller \
+    -R $ref \
+    -I ${bam} \
+    -O ${sample}.g.vcf.gz \
+    -ERC GVCF \
+    -bamout ${sample}_realigned.bam
+    """
+}
 
 //set up conda environment and remove "module" calls
 //make output not modifiable
