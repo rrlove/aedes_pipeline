@@ -10,6 +10,7 @@
  * running list of packages for the conda environment:
  * fastqc
  * trimmomatic
+ * bbmap (adapter sequences only)
  * bwa-mem2
  * gatk
  * picard
@@ -23,10 +24,10 @@ println "sample: $params.sample"
 
 ref = file(params.ref)
 println ref
-outdir = "${baseDir}/${params.sample}/"
+outdir = "${params.basedir}/${params.sample}/"
 scratchdir = "/pine/scr/r/r/rrlove/aedes_pipeline/"
 println outdir
-adapter_dir = "/nas/longleaf/home/rrlove/.conda/envs/varaedes/share/trimmomatic-0.39-1/adapters/"
+adapter_dir = "/nas/longleaf/home/rrlove/.conda/envs/varaedes/opt/bbmap-38.90-0/resources/"
 sample = params.sample
 intervals = params.intervals
 
@@ -102,7 +103,7 @@ process trim {
     
     """
     trimmomatic PE ${reads[0]} ${reads[1]} -baseout ${sample}_${lane}_trimmed.fq.gz \
-    ILLUMINACLIP:${adapter_dir}TruSeq3-PE.fa:2:30:10 LEADING:10 TRAILING:10 MINLEN:100
+    ILLUMINACLIP:${adapter_dir}adapters.fa:2:30:10 LEADING:10 TRAILING:10 MINLEN:100
     """
 }
 
@@ -289,8 +290,10 @@ process mark_dups {
 process bamqc_qc{
     publishDir "${outdir}qc/qualimap", mode: "copy"
     tag "$sample"
-    memory "4G"
+    memory { 4.GB * task.attempt }
     time '6d'
+    errorStrategy 'retry'
+    maxRetries 3
     //module 'qualimap'
 
     input:
@@ -408,8 +411,33 @@ process merge_gvcfs{
 }
 
 /*
+ * Index gVCF
+ * Tool: GATK
+ * Input: merged_gvcfs_ch
+ * Output: indexed_gvcfs_ch
+*/
+
+process index_gvcfs{
+    publishDir "${outdir}data/vcf", mode: "copy"
+    tag "$sample"
+    memory "8G"
+    
+    input:
+    tuple val(sample), path(merged_gzvcf) from merged_gvcfs_ch
+    
+    output:
+    tuple val(sample), path("${sample}.g.vcf.gz.tbi") into indexed_gvcfs_ch
+    
+    script:
+    """
+    gatk IndexFeatureFile \
+    -I ${sample}.g.vcf.gz
+    """
+}
+
+/*
  * Merge the realigned BAM files produced by HaplotypeCaller
- * Tool: samtools
+ * Tool: samtoolss
  * Input: Channel realigned_bam_chunks_ch
  * Output: Channel merged_realigned_bams_ch
 */
@@ -436,21 +464,24 @@ process multiqc{
     input:
     tuple val(sample), val(lane), file("${sample}_L00${lane}_*fastqc.html") from fastqc_pre_trim_ch
     tuple val(sample), val(lane), path("${sample}_${lane}_trimmed_*P.fq.gz") from trimmed_reads_for_multiqc_ch
-    tuple val(sample), val(lane), file("${sample}_${lane}_trimmed_*fastqc.html") from fastqc_post_trim_ch
-    path("${sample}_sorted_dedup_stats*") from qualimap_results_ch
+    tuple val(sample), val(lane), file("${sample}_${lane}_trimmed_*P*fastqc.html") from fastqc_post_trim_ch
+    path("${sample}_sorted_dedup_stats*/qualimapReport.html") from qualimap_results_ch
     path("${sample}_picard_metrics*") from picard_results_ch
     
     output:
-    path("") into multiqc_output_ch
+    path("${sample}_multiqc_report.html") into multiqc_output_ch
     
     script:
     
     """
-    multiqc -n "${sample}"_multiqc_report.html "${outdir}"qc/fastqc
-    multiqc -n "${sample}"_multiqc_report.html "${outdir}"qc/picard
-    multiqc -n "${sample}"_multiqc_report.html "${outdir}"qc/qualimap
-    multiqc -n "${sample}"_multiqc_report.html "${outdir}"data/trimmed_reads
-    multiqc -n "${sample}"_multiqc_report.html "${outdir}"data/bam
+    multiqc \
+    -n "${sample}"_multiqc_report.html \
+    -c /overflow/dschridelab/users/rrlove/aedes/pipeline/multiqc_config.yaml \
+    "${outdir}"qc/fastqc \
+    "${outdir}"qc/picard \
+    "${outdir}"qc/qualimap \
+    "${outdir}"data/trimmed_reads \
+    "${outdir}"data/bam
     """
     
 }
