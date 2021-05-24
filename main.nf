@@ -49,7 +49,7 @@ Channel
     //.view()
     .map { path -> subtags = (path.getBaseName() =~ /([\w\d\-]+_S\d+)_L0+(\d+)/)[0]; [sample, subtags[2], path] }
     //.view()
-    .groupTuple(by : [0, 1])
+    .groupTuple(by : [0, 1], sort : true)
     //.view()
     .into{ reads_for_qc_ch; reads_for_trimming_ch }
     
