@@ -6,6 +6,8 @@
 
 */
 
+//TODO: adjust minimum trim length
+
 
 /*
  * running list of packages for the conda environment:
@@ -16,6 +18,11 @@
  * picard
  * qualimap
  */
+ 
+//set default values for parameters
+params.sequenced = false
+params.singleEnd = null
+params.trim = 100
 
 if( !params.reads ) error "Missing reads parameter"
 if( !params.sample ) error "Missing sample parameter"
@@ -24,11 +31,13 @@ if( !params.sequenced && (!params.platform || params.platform instanceof Boolean
 println "sample: $params.sample"
 
 ref = file(params.ref)
-println ref
-outdir = "${baseDir}/${params.sample}/"
-println outdir
-adapter_dir = "/nas/longleaf/home/rrlove/.conda/envs/varaedes/opt/bbmap-38.90-0/resources/"
 sample = params.sample
+trim = params.trim
+//println ref
+outdir = "${baseDir}/${params.sample}/"
+//println outdir
+adapter_dir = "/nas/longleaf/home/rrlove/.conda/envs/varaedes/opt/bbmap-38.90-0/resources/"
+
 
 log.info """
 VARAEDES
@@ -38,12 +47,11 @@ reads   : $params.reads
 sample  : $params.sample
 current directory:  "$PWD"
 basedir : "$outdir"
-lanes   :  $params.lanes
-ended  :   $params.singleEnd
+single-ended  :   $params.singleEnd
+sequenced   :   $params.sequenced
 
 """
 
-    
 reads = file(params.reads)
 println reads
 println reads.size()
@@ -125,7 +133,7 @@ process trim {
     if ( params.singleEnd ) {
     """
     trimmomatic SE ${reads} ${sample}_${lane}_trimmed_P.fq.gz \
-    ILLUMINACLIP:${adapter_dir}adapters.fa:2:30:10 LEADING:10 TRAILING:10 MINLEN:100
+    ILLUMINACLIP:${adapter_dir}adapters.fa:2:30:10 LEADING:10 TRAILING:10 MINLEN:${trim}
     """
     } 
     
@@ -133,7 +141,7 @@ process trim {
     """
     trimmomatic PE ${reads[0]} ${reads[1]} \
     -baseout ${sample}_${lane}_trimmed.fq.gz \
-    ILLUMINACLIP:${adapter_dir}adapters.fa:2:30:10 LEADING:10 TRAILING:10 MINLEN:100
+    ILLUMINACLIP:${adapter_dir}adapters.fa:2:30:10 LEADING:10 TRAILING:10 MINLEN:${trim}
     """
     }
 }
@@ -188,8 +196,6 @@ process extract_read_groups {
     pu=${array[3]}.${array[2]}.${array[-1]}
     RG="@RG\\tID:"${id}"\\tLB:"${lb}"\\tPL:"${pl}"\\tSM:"${sample}"\\tPU:"${pu}
     
-    //I'll need to come up with a better way of passing in the read group information... it's not practical to make an if else block for each data type
-    //if type == sequenced...? else pass in read group info
     '''
     }
     
@@ -198,7 +204,6 @@ process extract_read_groups {
     RG="@RG\\tID:"!{sample}"\\tLB:"!{sample}"\\tPL:"!{params.platform}"\\tSM:"!{sample}"\\tPU:"!{sample}
     '''
     }
-
 
 //IFS=':' read -r -a ARRAY <<< (zcat "!{sample}_!{lane}_trimmed_*P.fq.gz" | head -n 1)
 
@@ -275,6 +280,61 @@ process merge_bams {
     samtools merge ${sample}_merged.bam ${aligned_reads}
     """
 }
+
+process mark_dups {
+    publishDir "${outdir}data/bam", mode: "copy"
+    tag "sample"
+    //module 'gatk'
+    //module 'samtools'
+    cpus 4
+    memory "16G"
+    
+    input:
+    tuple val(sample), path(merged_bam) from merged_reads_ch
+    
+    output: 
+    tuple val(sample), file("${sample}_sorted_dedup.bam") into bam_dedup_merge_ch, bam_for_qualimap_ch, bam_for_picard_ch
+    tuple val(sample), file("${sample}_sorted_dedup.bam.bai") into bam_index_ch
+
+    script:
+
+    """    
+    gatk MarkDuplicatesSpark \
+    -I ${merged_bam} \
+    -M ${sample}_dedup_metrics.txt \
+    -O ${sample}_sorted_dedup.bam    \
+    --conf 'spark.executor.cores=4'
+    
+    samtools index ${sample}_sorted_dedup.bam
+    """
+}
+
+process bamqc_qc{
+    publishDir "${outdir}qc/qualimap", mode: "copy"
+    tag "$sample"
+    memory { 4.GB * task.attempt }
+    time '6d'
+    errorStrategy 'retry'
+    maxRetries 3
+    //module 'qualimap'
+
+    input:
+    tuple val(sample), path(aligned_bam) from bam_for_qualimap_ch
+    
+    output:
+    path("${sample}_sorted_dedup_stats*") into qualimap_results_ch
+
+    """
+    qualimap bamqc \
+    -bam ${aligned_bam} \
+    --java-mem-size=4G
+
+    """
+}
+
+
+//ADD ENA SAMPLE TO SPREADSHEET
+
     
 
     
