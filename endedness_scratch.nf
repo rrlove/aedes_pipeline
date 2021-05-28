@@ -6,9 +6,6 @@
 
 */
 
-//TODO: adjust minimum trim length
-
-
 /*
  * running list of packages for the conda environment:
  * fastqc
@@ -33,11 +30,11 @@ println "sample: $params.sample"
 ref = file(params.ref)
 sample = params.sample
 trim = params.trim
+intervals = params.intervals
 //println ref
 outdir = "${baseDir}/${params.sample}/"
 //println outdir
 adapter_dir = "/nas/longleaf/home/rrlove/.conda/envs/varaedes/opt/bbmap-38.90-0/resources/"
-
 
 log.info """
 VARAEDES
@@ -332,10 +329,105 @@ process bamqc_qc{
     """
 }
 
+/*
+ * Check the quality of the BAMs with picard
+ * Tool: picard
+ * Input: Channel bam_for_picard_ch
+ * Outout: Channel picard_results_ch
+*/
 
-//ADD ENA SAMPLE TO SPREADSHEET
-
+process picard_qc{
+    publishDir "${outdir}qc/picard", mode: "copy"
+    tag "$sample"
+    memory "4G"
+    time '6d'
+    //module 'picard'
     
+    input:
+    tuple val(sample), path(aligned_bam) from bam_for_picard_ch
+    
+    output:
+    path("${sample}_picard_metrics*") into picard_results_ch
+
+    """
+
+    picard CollectMultipleMetrics \
+    -I ${aligned_bam} \
+    -O ${sample}_picard_metrics
+    """
+}
+
+/*
+ * Genotype variants in the specimen, splitting across chromosomes/scaffolds
+ * Tool: GATK
+ * Input: Channel bam_dedup_merge_ch, intervals_ch
+ * Output: Channel genotyped_variant_chunks_ch, realigned_bam_chunks_ch
+*/
+
+Channel
+    .fromPath( intervals )
+    //.view()
+    .set{ intervals_ch }
+
+process call_variants{
+    //publishDir "${outdir}data/vcf/chunked", pattern: '*vcf*'
+    //publishDir "${outdir}data/bam", pattern: '*bam*'
+    tag "$sample"
+    //module 'gatk'
+    memory "8G"
+    
+    input:
+    tuple val(sample), path(bam) from bam_dedup_merge_ch
+    path( intervals ) from intervals_ch
+
+    output:
+    file("${sample}.${intervals.simpleName}.g.vcf.gz") into genotyped_variant_chunks_ch
+    path("${sample}_${intervals.simpleName}.realigned.bam") into realigned_bam_chunks_ch
+
+    script:
+    """
+    gatk HaplotypeCaller \
+    -R $ref \
+    -I ${bam} \
+    -O ${sample}.${intervals.simpleName}.g.vcf.gz \
+    -ERC GVCF \
+    -bamout ${sample}_${intervals.simpleName}.realigned.bam \
+    -L ${intervals}
+    """
+}
+
+/*
+ * Merge gVCFs
+ * Tool: bash, picard
+ * Input: Channel genotyped_variant_chunks_ch
+ * Output: Channel merged_gvcfs_ch
+*/
+
+process merge_gvcfs{
+    publishDir "${outdir}data/vcf", mode: "copy"
+    tag "$sample"
+    memory "8G"
+    
+    input:
+    file(vcfsList) from genotyped_variant_chunks_ch.toSortedList( { path -> path.getBaseName() } )
+    
+    output:
+    tuple val(sample), path("${sample}.g.vcf.gz") into merged_gvcfs_ch
+
+    shell:
+
+    '''
+    for file in !{vcfsList}
+    do
+        echo ${file} >> !{sample}_vcfs_to_merge.list
+    
+    done
+
+    picard GatherVcfs \
+    --INPUT !{sample}_vcfs_to_merge.list \
+    --OUTPUT !{sample}.g.vcf.gz \
+    '''
+}
 
     
 /*Channel
