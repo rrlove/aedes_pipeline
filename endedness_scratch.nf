@@ -429,6 +429,32 @@ process merge_gvcfs{
     '''
 }
 
+/*
+ * Index gVCF
+ * Tool: GATK
+ * Input: merged_gvcfs_ch
+ * Output: indexed_gvcfs_ch
+*/
+
+process index_gvcfs{
+    publishDir "${outdir}data/vcf", mode: "copy"
+    tag "$sample"
+    memory "8G"
+    
+    input:
+    tuple val(sample), path(merged_gzvcf) from merged_gvcfs_ch
+    
+    output:
+    tuple val(sample), path("${sample}.g.vcf.gz.tbi") into indexed_gvcfs_ch
+    
+    script:
+    """
+    gatk IndexFeatureFile \
+    -I ${sample}.g.vcf.gz
+    """
+}
+
+
     
 /*Channel
     .fromPath( reads )
