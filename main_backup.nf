@@ -1,10 +1,10 @@
 /* GATK Variant Calling Pipeline
- * Usage: nextflow run main.nf --ref --reads --sample --basedir
+ * Usage: nextflow run main.nf --ref --reads --sample --basedir --intervals
  *
  * Author: RRLove < rrlove@email.unc.edu >
  * University of North Carolina Chapel Hill, 2021
-
 */
+
 
 /*
  * running list of packages for the conda environment:
@@ -14,25 +14,21 @@
  * gatk
  * picard
  * qualimap
+ * multiqc
  */
- 
-//set default values for parameters
-params.sequenced = false
-//params.sequenced indicates whether or not it is raw read data from UNC, meaning it has the read group information intact, or was downloaded, meaning it does not
-params.singleEnd = null
-params.trim = 100
 
 if( !params.reads ) error "Missing reads parameter"
 if( !params.sample ) error "Missing sample parameter"
-if( !params.sequenced && (!params.platform || params.platform instanceof Boolean )) error \
-"If read group information not present in headers, you must specify the sequencing platform (e.g. Illumina)"
+println "sample: $params.sample"
 
 ref = file(params.ref)
+println ref
+outdir = "${baseDir}/${params.sample}/"
+scratchdir = "/pine/scr/r/r/rrlove/aedes_pipeline/"
+println outdir
+adapter_dir = "/nas/longleaf/home/rrlove/.conda/envs/varaedes/share/trimmomatic-0.39-1/adapters/"
 sample = params.sample
-trim = params.trim
 intervals = params.intervals
-outdir = "${params.basedir}/${params.sample}/"
-adapter_dir = "/nas/longleaf/home/rrlove/.conda/envs/varaedes/opt/bbmap-38.90-0/resources/"
 
 log.info """
 VARAEDES
@@ -42,40 +38,20 @@ reads   : $params.reads
 sample  : $params.sample
 current directory:  "$PWD"
 basedir : "$outdir"
-single-ended  :   $params.singleEnd
-sequenced   :   $params.sequenced
 
 """
 
-reads = file(params.reads)
 
-if ( reads.size() > 2 ) {
-
-    Channel
-    .fromPath( reads )
+Channel
+    .fromPath( params.reads )
     .ifEmpty{ error "Cannot find any reads matching: ${params.reads}" }
-    .view()
-    .map { path -> subtags = (path.getBaseName() =~ /[\w\d\-\_]+_L0*(\d+)/)[0]; [sample, subtags[1], path] }
-    .view()
-    .groupTuple(by : [0, 1], sort : true)
-    .view()
+    //.view()
+    .map { path -> subtags = (path.getBaseName() =~ /([\w\d\-]+_S\d+)_L0+(\d+)/)[0]; [sample, subtags[2], path] }
+    //.view()
+    .groupTuple(by : [0, 1])
+    //.view()
     .into{ reads_for_qc_ch; reads_for_trimming_ch }
-}
-else {
-
-    Channel
-    .fromPath ( reads )
-    .ifEmpty{ error "Cannot find any reads matching: ${params.reads}" }
-    .view()
-    .map { path -> [sample, "1", path] }
-    .view()
-    .groupTuple(by : [0, 1], sort : true)
-    .view()
-    .into{ reads_for_qc_ch; reads_for_trimming_ch }
-}
-
-//reads_for_trimming_ch.view()
-
+    
 /*
  * First quality check
  * Tool: fastqc
@@ -83,8 +59,9 @@ else {
  * Output: Channel fastqc_pre_trim_ch
  */
 
+
 process initialQC {
-    publishDir "${outdir}qc/fastqc", mode: "copy"
+    publishDir "${outdir}qc/fastqc"
     tag "$sample_$lane"
     //module 'fastqc'
     
@@ -92,23 +69,14 @@ process initialQC {
     tuple val(sample), val(lane), path(reads) from reads_for_qc_ch
     
     output: 
-    tuple val(sample), val(lane), file("${sample}*fastqc.html"), file("${sample}*fastqc.zip")  into fastqc_pre_trim_ch
+    tuple val(sample), val(lane), file("${sample}_L00${lane}_*fastqc.html") into fastqc_pre_trim_ch
 
     script: 
-    
-    if ( params.singleEnd ){
 
-    """
-    fastqc ${reads}
-    """
-    }
-    
-    else {
     """
     fastqc ${reads[0]} ${reads[1]}
     """
-    }
-    
+
 }
 
 /*
@@ -120,33 +88,23 @@ trimmed_reads_for_rg_ch ; trimmed_reads_for_multiqc_ch
 */
 
 process trim {
-    publishDir "${outdir}data/trimmed_reads", mode: "copy"
+    publishDir "${outdir}data/trimmed_reads"
     tag "$sample_$lane"
     //module 'trimmomatic'
 
     input: 
     tuple val(sample), val(lane), path(reads) from reads_for_trimming_ch
     output: 
-    tuple val(sample), val(lane), path("${sample}_${lane}_trimmed*P.fq.gz") \
+    tuple val(sample), val(lane), path("${sample}_${lane}_trimmed_*P.fq.gz") \
     into trimmed_reads_for_qc_ch, trimmed_reads_for_align_ch, \
     trimmed_reads_for_rg_ch, trimmed_reads_for_multiqc_ch
     
     script:
     
-    if ( params.singleEnd ) {
     """
-    trimmomatic SE ${reads} ${sample}_${lane}_trimmed_P.fq.gz \
-    ILLUMINACLIP:${adapter_dir}adapters.fa:2:30:10 LEADING:10 TRAILING:10 MINLEN:${trim}
+    trimmomatic PE ${reads[0]} ${reads[1]} -baseout ${sample}_${lane}_trimmed.fq.gz \
+    ILLUMINACLIP:${adapter_dir}TruSeq3-PE.fa:2:30:10 LEADING:10 TRAILING:10 MINLEN:100
     """
-    } 
-    
-    else {
-    """
-    trimmomatic PE ${reads[0]} ${reads[1]} \
-    -baseout ${sample}_${lane}_trimmed.fq.gz \
-    ILLUMINACLIP:${adapter_dir}adapters.fa:2:30:10 LEADING:10 TRAILING:10 MINLEN:${trim}
-    """
-    }
 }
 
 /*
@@ -157,7 +115,7 @@ process trim {
 */
 
 process secondQC {
-    publishDir "${outdir}qc/fastqc", mode: "copy"
+    publishDir "${outdir}qc/fastqc"
     tag "$sample_$lane"
     //module 'fastqc'
 
@@ -165,22 +123,13 @@ process secondQC {
     tuple val(sample), val(lane), path(trimmed_reads) from trimmed_reads_for_qc_ch
 
     output: 
-    tuple val(sample), val(lane), file("${sample}*trimmed*fastqc.html"), file("${sample}*trimmed*fastqc.zip") into fastqc_post_trim_ch
+    tuple val(sample), val(lane), file("${sample}_${lane}_trimmed_*fastqc.html") into fastqc_post_trim_ch
 
     script: 
     
-    if ( params.singleEnd ){
-
-    """
-    fastqc ${trimmed_reads}
-    """
-    }
-    
-    else {
     """
     fastqc ${trimmed_reads[0]} ${trimmed_reads[1]}
     """
-    }
 }
 
 /*
@@ -201,10 +150,8 @@ process extract_read_groups {
     
     shell:
     
-    if ( params.sequenced ) {
-    
     '''
-    header=$(zcat !{sample}_!{lane}_trimmed*.fq.gz | head -n 1)
+    header=$(zcat !{sample}_!{lane}_trimmed_*P.fq.gz | head -n 1)
     IFS=':'; array=($header); unset IFS
     sample=!{sample}
     lb="lib-"${sample}
@@ -212,15 +159,8 @@ process extract_read_groups {
     id=${array[2]}.${array[3]}.${array[4]}
     pu=${array[3]}.${array[2]}.${array[-1]}
     RG="@RG\\tID:"${id}"\\tLB:"${lb}"\\tPL:"${pl}"\\tSM:"${sample}"\\tPU:"${pu}
-    
     '''
-    }
-    
-    else {
-    '''
-    RG="@RG\\tID:"!{sample}"\\tLB:"!{sample}"\\tPL:"!{params.platform}"\\tSM:"!{sample}"\\tPU:"!{sample}
-    '''
-    }
+
 
 //IFS=':' read -r -a ARRAY <<< (zcat "!{sample}_!{lane}_trimmed_*P.fq.gz" | head -n 1)
 
@@ -258,9 +198,10 @@ process extract_read_groups {
 */
 
 process align_reads {
+    publishDir "${outdir}data/bam"
     tag "$sample_$lane"
     cpus 4
-    memory "32G"
+    memory "16G"
     //module 'samtools'
     
     input:
@@ -280,8 +221,10 @@ process align_reads {
 
 aligned_reads_ch
     .collect()
-    .set { aligned_reads_path_ch }
+    //.flatten()
+    //.filter( Path )
     //.view()
+    .set { aligned_reads_path_ch }
     
 /*
  * Merge BAM files
@@ -290,8 +233,9 @@ aligned_reads_ch
  * Output: Channel merged_bam
  * NB: this extra step is because of the difficulty in getting Picard to take multiple files from nextflow
 */
-    
-process merge_bams {
+
+process merge_reads {
+    publishDir "${outdir}data/bam"
     tag "$sample"
     //module 'samtools'
     
@@ -306,6 +250,28 @@ process merge_bams {
     """
 }
 
+input:
+    file(vcfsList) from genotyped_variant_chunks_ch.toSortedList( { path -> path.getBaseName() } )
+    
+    output:
+    tuple val(sample), path("${sample}.g.vcf.gz") into merged_gvcfs_ch
+
+    shell:
+
+    '''
+    for file in !{vcfsList}
+    do
+        echo ${file} >> !{sample}_vcfs_to_merge.list
+    
+    done
+
+    picard GatherVcfs \
+    --INPUT !{sample}_vcfs_to_merge.list \
+    --OUTPUT !{sample}.g.vcf.gz \
+    '''
+}
+
+
 /*
  * Mark duplicates
  * Tool: MarkDuplicatesSpark
@@ -314,23 +280,21 @@ process merge_bams {
 */
 
 process mark_dups {
-    publishDir "${outdir}data/bam", mode: "copy"
+    publishDir "${outdir}data/bam"
     tag "sample"
     //module 'gatk'
     //module 'samtools'
     cpus 4
     memory "16G"
     
-    input:
+    input: 
     tuple val(sample), path(merged_bam) from merged_reads_ch
     
     output: 
     tuple val(sample), file("${sample}_sorted_dedup.bam") into bam_dedup_merge_ch, bam_for_qualimap_ch, bam_for_picard_ch
     tuple val(sample), file("${sample}_sorted_dedup.bam.bai") into bam_index_ch
 
-    script:
-
-    """    
+    """
     gatk MarkDuplicatesSpark \
     -I ${merged_bam} \
     -M ${sample}_dedup_metrics.txt \
@@ -349,12 +313,10 @@ process mark_dups {
 */
 
 process bamqc_qc{
-    publishDir "${outdir}qc/qualimap", mode: "copy"
+    publishDir "${outdir}qc/qualimap"
     tag "$sample"
-    memory { 4.GB * task.attempt }
+    memory "4G"
     time '6d'
-    errorStrategy 'retry'
-    maxRetries 3
     //module 'qualimap'
 
     input:
@@ -379,7 +341,7 @@ process bamqc_qc{
 */
 
 process picard_qc{
-    publishDir "${outdir}qc/picard", mode: "copy"
+    publishDir "${outdir}qc/picard"
     tag "$sample"
     memory "4G"
     time '6d'
@@ -412,8 +374,8 @@ Channel
     .set{ intervals_ch }
 
 process call_variants{
-    //publishDir "${outdir}data/vcf/chunked", pattern: '*vcf*'
-    //publishDir "${outdir}data/bam", pattern: '*bam*'
+    publishDir "${outdir}data/vcf/chunked", pattern: '*vcf*'
+    publishDir "${outdir}data/bam", pattern: '*bam*'
     tag "$sample"
     //module 'gatk'
     memory "8G"
@@ -424,7 +386,7 @@ process call_variants{
 
     output:
     file("${sample}.${intervals.simpleName}.g.vcf.gz") into genotyped_variant_chunks_ch
-    path("${sample}_${intervals.simpleName}.realigned.bam") into realigned_bam_chunks_ch
+    tuple val(sample), path("${sample}_${intervals.simpleName}.realigned.bam") into realigned_bam_chunks_ch
 
     script:
     """
@@ -445,8 +407,9 @@ process call_variants{
  * Output: Channel merged_gvcfs_ch
 */
 
+
 process merge_gvcfs{
-    publishDir "${outdir}data/vcf", mode: "copy"
+    publishDir "${outdir}data/vcf", pattern: '*vcf*'
     tag "$sample"
     memory "8G"
     
@@ -471,89 +434,34 @@ process merge_gvcfs{
     '''
 }
 
-/*
- * Index gVCF
- * Tool: GATK
- * Input: Channel merged_gvcfs_ch
- * Output: Channel indexed_gvcfs_ch
-*/
-
-process index_gvcfs{
-    publishDir "${outdir}data/vcf", mode: "copy"
-    tag "$sample"
-    memory "8G"
-    
-    input:
-    tuple val(sample), path(merged_gzvcf) from merged_gvcfs_ch
-    
-    output:
-    tuple val(sample), path("${sample}.g.vcf.gz.tbi") into indexed_gvcfs_ch
-    
-    script:
-    """
-    gatk IndexFeatureFile \
-    -I ${sample}.g.vcf.gz
-    """
-}
-
-/*
- * Merge the realigned BAM files produced by HaplotypeCaller
- * Tool: samtools
- * Input: Channel realigned_bam_chunks_ch
- * Output: Channel merged_realigned_bams_ch
-*/
-
-process merge_realigned_bams {
-    publishDir "${outdir}data/bam", mode: "copy"
-    tag "$sample"
-
-    input:
-    path(realigned_bams) from realigned_bam_chunks_ch.collect()
-
-    output:
-    file("${sample}_realigned.bam") into merged_realigned_bams_ch
-    
-    """
-    samtools merge ${sample}_realigned.bam ${realigned_bams}
-    """
-}
-
-/*
- * Compile the quality reports
- * Tool: multiqc
- * Input: Channel fastqc_pre_trim_ch, Channel trimmed_reads_for_multiqc_ch, Channel fastqc_post_trim_ch, Channel qualimap_results_ch, Channel picard_results_ch
- * Output: Channel multiqc_output_ch
-*/
-
 process multiqc{
-    publishDir "${outdir}qc/multiqc", mode: "copy"
+    publishDir "${outdir}qc/multiqc"
     tag "${sample}"
     
     input:
-    tuple val(sample), val(lane), file("${sample}_L00${lane}_*fastqc.html"), file("${sample}_L00${lane}_*fastqc.zip") from fastqc_pre_trim_ch
+    tuple val(sample), val(lane), file("${sample}_L00${lane}_*fastqc.html") from fastqc_pre_trim_ch
     tuple val(sample), val(lane), path("${sample}_${lane}_trimmed_*P.fq.gz") from trimmed_reads_for_multiqc_ch
-    tuple val(sample), val(lane), file("${sample}_${lane}_trimmed_*P*fastqc.html"), file("${sample}_${lane}_trimmed_*P*fastqc.zip") from fastqc_post_trim_ch
-    path("${sample}_sorted_dedup_stats*/qualimapReport.html") from qualimap_results_ch
+    tuple val(sample), val(lane), file("${sample}_${lane}_trimmed_*fastqc.html") from fastqc_post_trim_ch
+    path("${sample}_sorted_dedup_stats*") from qualimap_results_ch
     path("${sample}_picard_metrics*") from picard_results_ch
     
     output:
-    path("${sample}_multiqc_report.html") into multiqc_output_ch
+    path("") into multiqc_output_ch
     
     script:
     
     """
-    multiqc \
-    -n "${sample}"_multiqc_report.html \
-    -c /overflow/dschridelab/users/rrlove/aedes/pipeline/multiqc_config.yaml \
-    "${outdir}"qc/fastqc \
-    "${outdir}"qc/picard \
-    "${outdir}"qc/qualimap \
-    "${outdir}"data/trimmed_reads \
-    "${outdir}"data/bam
+    multiqc -n "${sample}"_multiqc_report.html "${outdir}"qc/fastqc
+    multiqc -n "${sample}"_multiqc_report.html "${outdir}"qc/picard
+    multiqc -n "${sample}"_multiqc_report.html "${outdir}"qc/qualimap
+    multiqc -n "${sample}"_multiqc_report.html "${outdir}"data/trimmed_reads
+    multiqc -n "${sample}"_multiqc_report.html "${outdir}"data/bam
     """
     
 }
+
 
 //make output not modifiable
 //validate choice of trimmomatic parameters
 //find good heterozygosity parameters for HaplotypeCaller
+

@@ -1,5 +1,5 @@
 /* GATK Variant Genotyping Pipeline
- * Usage: nextflow run main.nf --ref --basedir --intervals --update --mapfile --workspace_path --lazy
+ * Usage: nextflow run main.nf --ref --basedir --intervals --update --mapfile --workspace_path --outprefix --lazy
  *
  * Author: RRLove < rrlove@email.unc.edu >
  * University of North Carolina Chapel Hill, 2021
@@ -18,6 +18,7 @@ basedir = params.basedir
 intervals = params.intervals
 mapfile = params.mapfile
 workspace_path = params.workspace_path
+outprefix = params.outprefix
 
 if( !params.ref || params.ref instanceof Boolean ) error "Missing reference genome"
 if( !params.basedir || params.basedir instanceof Boolean ) error "Missing base directory path"
@@ -29,7 +30,6 @@ if( params.lazy && !params.update ) error "Lazy sample addition can only be used
 outdir = "${basedir}/vcf"
 scratchdir = "/pine/scr/r/r/rrlove/aedes_pipeline/"
 date = new java.util.Date().format( 'MMddyy' )
-
 
 log.info """
 GENOTYPE_GVCFs
@@ -88,8 +88,10 @@ process get_changes {
 */
 
 process build_database {
-    publishDir "${outdir}"
-    memory "16G"
+    publishDir "${outdir}", mode : "copy"
+    memory { 16.GB * task.attempt }
+    errorStrategy 'retry'
+    maxRetries 2
     
     input:
     path(mapfile) from map_ch.mix(mapfile_ch)
@@ -151,14 +153,14 @@ process update_database {
 */
 
 process genotype_GVCFs {
-    publishDir "${outdir}"
+    publishDir "${outdir}", mode : "copy"
     memory "16G"
     
     input:
     path(database) from database_built_ch.mix(database_updated_ch)
     
     output:
-    path("merged*.vcf.gz") into merged_vcf_ch
+    path("*merged*.vcf.gz") into merged_vcf_ch
     
     script:
     
@@ -166,7 +168,7 @@ process genotype_GVCFs {
     gatk --java-options "-Xmx13G" GenotypeGVCFs \
     -R ${ref} \
     -V gendb://${database} \
-    -O "merged_${date}.vcf.gz"
+    -O "${outprefix}_merged_${date}.vcf.gz"
     
     """
 }
