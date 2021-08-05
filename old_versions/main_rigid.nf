@@ -1,38 +1,35 @@
 /* GATK Variant Calling Pipeline
- * Usage: nextflow run main.nf --ref --reads --sample --basedir
+ * Usage: nextflow run main.nf --ref --reads --sample --basedir --intervals
  *
  * Author: RRLove < rrlove@email.unc.edu >
  * University of North Carolina Chapel Hill, 2021
-
 */
+
 
 /*
  * running list of packages for the conda environment:
  * fastqc
  * trimmomatic
+ * bbmap (adapter sequences only)
  * bwa-mem2
  * gatk
  * picard
  * qualimap
+ * multiqc
  */
- 
-//set default values for parameters
-params.sequenced = false
-//params.sequenced indicates whether or not it is raw read data from UNC, meaning it has the read group information intact, or was downloaded, meaning it does not
-params.singleEnd = null
-params.trim = 100
 
 if( !params.reads ) error "Missing reads parameter"
 if( !params.sample ) error "Missing sample parameter"
-if( !params.sequenced && (!params.platform || params.platform instanceof Boolean )) error \
-"If read group information not present in headers, you must specify the sequencing platform (e.g. Illumina)"
+println "sample: $params.sample"
 
 ref = file(params.ref)
-sample = params.sample
-trim = params.trim
-intervals = params.intervals
+println ref
 outdir = "${params.basedir}/${params.sample}/"
+scratchdir = "/pine/scr/r/r/rrlove/aedes_pipeline/"
+println outdir
 adapter_dir = "/nas/longleaf/home/rrlove/.conda/envs/varaedes/opt/bbmap-38.90-0/resources/"
+sample = params.sample
+intervals = params.intervals
 
 log.info """
 VARAEDES
@@ -42,40 +39,20 @@ reads   : $params.reads
 sample  : $params.sample
 current directory:  "$PWD"
 basedir : "$outdir"
-single-ended  :   $params.singleEnd
-sequenced   :   $params.sequenced
 
 """
 
-reads = file(params.reads)
 
-if ( reads.size() > 2 ) {
-
-    Channel
-    .fromPath( reads )
+Channel
+    .fromPath( params.reads )
     .ifEmpty{ error "Cannot find any reads matching: ${params.reads}" }
-    .view()
-    .map { path -> subtags = (path.getBaseName() =~ /[\w\d\-\_]+_L0*(\d+)/)[0]; [sample, subtags[1], path] }
-    .view()
+    //.view()
+    .map { path -> subtags = (path.getBaseName() =~ /([\w\d\-]+_S\d+)_L0+(\d+)/)[0]; [sample, subtags[2], path] }
+    //.view()
     .groupTuple(by : [0, 1], sort : true)
-    .view()
+    //.view()
     .into{ reads_for_qc_ch; reads_for_trimming_ch }
-}
-else {
-
-    Channel
-    .fromPath ( reads )
-    .ifEmpty{ error "Cannot find any reads matching: ${params.reads}" }
-    .view()
-    .map { path -> [sample, "1", path] }
-    .view()
-    .groupTuple(by : [0, 1], sort : true)
-    .view()
-    .into{ reads_for_qc_ch; reads_for_trimming_ch }
-}
-
-//reads_for_trimming_ch.view()
-
+    
 /*
  * First quality check
  * Tool: fastqc
@@ -92,23 +69,14 @@ process initialQC {
     tuple val(sample), val(lane), path(reads) from reads_for_qc_ch
     
     output: 
-    tuple val(sample), val(lane), file("${sample}*fastqc.html"), file("${sample}*fastqc.zip")  into fastqc_pre_trim_ch
+    tuple val(sample), val(lane), file("${sample}_L00${lane}_*fastqc.html") into fastqc_pre_trim_ch
 
     script: 
-    
-    if ( params.singleEnd ){
 
-    """
-    fastqc ${reads}
-    """
-    }
-    
-    else {
     """
     fastqc ${reads[0]} ${reads[1]}
     """
-    }
-    
+
 }
 
 /*
@@ -127,26 +95,16 @@ process trim {
     input: 
     tuple val(sample), val(lane), path(reads) from reads_for_trimming_ch
     output: 
-    tuple val(sample), val(lane), path("${sample}_${lane}_trimmed*P.fq.gz") \
+    tuple val(sample), val(lane), path("${sample}_${lane}_trimmed_*P.fq.gz") \
     into trimmed_reads_for_qc_ch, trimmed_reads_for_align_ch, \
     trimmed_reads_for_rg_ch, trimmed_reads_for_multiqc_ch
     
     script:
     
-    if ( params.singleEnd ) {
     """
-    trimmomatic SE ${reads} ${sample}_${lane}_trimmed_P.fq.gz \
-    ILLUMINACLIP:${adapter_dir}adapters.fa:2:30:10 LEADING:10 TRAILING:10 MINLEN:${trim}
+    trimmomatic PE ${reads[0]} ${reads[1]} -baseout ${sample}_${lane}_trimmed.fq.gz \
+    ILLUMINACLIP:${adapter_dir}adapters.fa:2:30:10 LEADING:10 TRAILING:10 MINLEN:100
     """
-    } 
-    
-    else {
-    """
-    trimmomatic PE ${reads[0]} ${reads[1]} \
-    -baseout ${sample}_${lane}_trimmed.fq.gz \
-    ILLUMINACLIP:${adapter_dir}adapters.fa:2:30:10 LEADING:10 TRAILING:10 MINLEN:${trim}
-    """
-    }
 }
 
 /*
@@ -165,22 +123,13 @@ process secondQC {
     tuple val(sample), val(lane), path(trimmed_reads) from trimmed_reads_for_qc_ch
 
     output: 
-    tuple val(sample), val(lane), file("${sample}*trimmed*fastqc.html"), file("${sample}*trimmed*fastqc.zip") into fastqc_post_trim_ch
+    tuple val(sample), val(lane), file("${sample}_${lane}_trimmed_*fastqc.html") into fastqc_post_trim_ch
 
     script: 
     
-    if ( params.singleEnd ){
-
-    """
-    fastqc ${trimmed_reads}
-    """
-    }
-    
-    else {
     """
     fastqc ${trimmed_reads[0]} ${trimmed_reads[1]}
     """
-    }
 }
 
 /*
@@ -201,10 +150,8 @@ process extract_read_groups {
     
     shell:
     
-    if ( params.sequenced ) {
-    
     '''
-    header=$(zcat !{sample}_!{lane}_trimmed*.fq.gz | head -n 1)
+    header=$(zcat !{sample}_!{lane}_trimmed_*P.fq.gz | head -n 1)
     IFS=':'; array=($header); unset IFS
     sample=!{sample}
     lb="lib-"${sample}
@@ -212,15 +159,8 @@ process extract_read_groups {
     id=${array[2]}.${array[3]}.${array[4]}
     pu=${array[3]}.${array[2]}.${array[-1]}
     RG="@RG\\tID:"${id}"\\tLB:"${lb}"\\tPL:"${pl}"\\tSM:"${sample}"\\tPU:"${pu}
-    
     '''
-    }
-    
-    else {
-    '''
-    RG="@RG\\tID:"!{sample}"\\tLB:"!{sample}"\\tPL:"!{params.platform}"\\tSM:"!{sample}"\\tPU:"!{sample}
-    '''
-    }
+
 
 //IFS=':' read -r -a ARRAY <<< (zcat "!{sample}_!{lane}_trimmed_*P.fq.gz" | head -n 1)
 
@@ -260,7 +200,7 @@ process extract_read_groups {
 process align_reads {
     tag "$sample_$lane"
     cpus 4
-    memory "32G"
+    memory "16G"
     //module 'samtools'
     
     input:
@@ -281,7 +221,6 @@ process align_reads {
 aligned_reads_ch
     .collect()
     .set { aligned_reads_path_ch }
-    //.view()
     
 /*
  * Merge BAM files
@@ -290,7 +229,7 @@ aligned_reads_ch
  * Output: Channel merged_bam
  * NB: this extra step is because of the difficulty in getting Picard to take multiple files from nextflow
 */
-    
+
 process merge_bams {
     tag "$sample"
     //module 'samtools'
@@ -474,8 +413,8 @@ process merge_gvcfs{
 /*
  * Index gVCF
  * Tool: GATK
- * Input: Channel merged_gvcfs_ch
- * Output: Channel indexed_gvcfs_ch
+ * Input: merged_gvcfs_ch
+ * Output: indexed_gvcfs_ch
 */
 
 process index_gvcfs{
@@ -518,21 +457,14 @@ process merge_realigned_bams {
     """
 }
 
-/*
- * Compile the quality reports
- * Tool: multiqc
- * Input: Channel fastqc_pre_trim_ch, Channel trimmed_reads_for_multiqc_ch, Channel fastqc_post_trim_ch, Channel qualimap_results_ch, Channel picard_results_ch
- * Output: Channel multiqc_output_ch
-*/
-
 process multiqc{
     publishDir "${outdir}qc/multiqc", mode: "copy"
     tag "${sample}"
     
     input:
-    tuple val(sample), val(lane), file("${sample}_L00${lane}_*fastqc.html"), file("${sample}_L00${lane}_*fastqc.zip") from fastqc_pre_trim_ch
+    tuple val(sample), val(lane), file("${sample}_L00${lane}_*fastqc.html") from fastqc_pre_trim_ch
     tuple val(sample), val(lane), path("${sample}_${lane}_trimmed_*P.fq.gz") from trimmed_reads_for_multiqc_ch
-    tuple val(sample), val(lane), file("${sample}_${lane}_trimmed_*P*fastqc.html"), file("${sample}_${lane}_trimmed_*P*fastqc.zip") from fastqc_post_trim_ch
+    tuple val(sample), val(lane), file("${sample}_${lane}_trimmed_*P*fastqc.html") from fastqc_post_trim_ch
     path("${sample}_sorted_dedup_stats*/qualimapReport.html") from qualimap_results_ch
     path("${sample}_picard_metrics*") from picard_results_ch
     
@@ -554,6 +486,8 @@ process multiqc{
     
 }
 
+
 //make output not modifiable
 //validate choice of trimmomatic parameters
 //find good heterozygosity parameters for HaplotypeCaller
+
