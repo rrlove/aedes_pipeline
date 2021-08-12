@@ -443,7 +443,6 @@ process call_variants{
 
     output:
     file("${sample}.${intervals.simpleName}.g.vcf.gz") into genotyped_variant_chunks_ch
-    path("${sample}_${intervals.simpleName}.realigned.bam") into realigned_bam_chunks_ch
 
     script:
     
@@ -455,7 +454,6 @@ process call_variants{
     -O ${sample}.${intervals.simpleName}.g.vcf.gz \
     -ERC GVCF \
     --output-mode EMIT_ALL_CONFIDENT_SITES \
-    -bamout ${sample}_${intervals.simpleName}.realigned.bam \
     -L ${intervals}
     """
     }
@@ -467,7 +465,6 @@ process call_variants{
     -I ${bam} \
     -O ${sample}.${intervals.simpleName}.g.vcf.gz \
     -ERC GVCF \
-    -bamout ${sample}_${intervals.simpleName}.realigned.bam \
     -L ${intervals}
     """
     }
@@ -528,28 +525,6 @@ process index_gvcfs{
     """
     gatk IndexFeatureFile \
     -I ${sample}.g.vcf.gz
-    """
-}
-
-/*
- * Merge the realigned BAM files produced by HaplotypeCaller
- * Tool: samtools
- * Input: Channel realigned_bam_chunks_ch
- * Output: Channel merged_realigned_bams_ch
-*/
-
-process merge_realigned_bams {
-    publishDir "${outdir}data/bam", mode: "copy"
-    tag "$sample"
-
-    input:
-    path(realigned_bams) from realigned_bam_chunks_ch.collect()
-
-    output:
-    file("${sample}_realigned.bam") into merged_realigned_bams_ch
-    
-    """
-    samtools merge ${sample}_realigned.bam ${realigned_bams}
     """
 }
 
