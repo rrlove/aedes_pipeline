@@ -22,6 +22,7 @@ params.sequenced = false
 params.singleEnd = null
 params.trim = 100
 params.radseq = null
+params.confident_ref = null
 
 if( !params.reads ) error "Missing reads parameter"
 if( !params.sample ) error "Missing sample parameter"
@@ -45,7 +46,7 @@ current directory:  "$PWD"
 basedir : "$outdir"
 single-ended  :   $params.singleEnd
 sequenced   :   $params.sequenced
-
+confident_ref   :   $params.confident_ref
 """
 
 reads = file(params.reads)
@@ -314,6 +315,9 @@ process merge_bams {
  * Output: Channel bam_dups_marked_ch
 */
 
+/* MarkDuplicates shouldn't be used with radseq data: https://gatk.broadinstitute.org/hc/en-us/community/posts/4403892377371-Difference-in-RAD-seq-and-resequencing-data-analysis
+*/
+
 process mark_dups {
     publishDir "${outdir}data/bam", mode: "copy"
     tag "sample"
@@ -333,7 +337,11 @@ process mark_dups {
     
     if ( params.radseq ) {
     """
-    cp ${merged_bam} ${sample}_sorted_dedup.bam
+    picard SortSam \
+    I=${merged_bam} \
+    O=${sample}_sorted_dedup.bam \
+    SORT_ORDER=coordinate
+    
     samtools index ${sample}_sorted_dedup.bam
     """
     
@@ -404,7 +412,6 @@ process picard_qc{
     path("${sample}_picard_metrics*") into picard_results_ch
 
     """
-
     picard CollectMultipleMetrics \
     -I ${aligned_bam} \
     -O ${sample}_picard_metrics
@@ -439,6 +446,21 @@ process call_variants{
     path("${sample}_${intervals.simpleName}.realigned.bam") into realigned_bam_chunks_ch
 
     script:
+    
+    if ( params.confident_ref ) {
+    """
+    gatk HaplotypeCaller \
+    -R $ref \
+    -I ${bam} \
+    -O ${sample}.${intervals.simpleName}.g.vcf.gz \
+    -ERC GVCF \
+    --output-mode EMIT_ALL_CONFIDENT_SITES \
+    -bamout ${sample}_${intervals.simpleName}.realigned.bam \
+    -L ${intervals}
+    """
+    }
+    
+    else {
     """
     gatk HaplotypeCaller \
     -R $ref \
@@ -448,6 +470,7 @@ process call_variants{
     -bamout ${sample}_${intervals.simpleName}.realigned.bam \
     -L ${intervals}
     """
+    }
 }
 
 /*
