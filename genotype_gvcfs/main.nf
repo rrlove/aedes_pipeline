@@ -12,6 +12,8 @@
 
 params.update = false
 params.lazy = false
+params.memfactor = 1
+params.confident_ref = null
 
 ref = file(params.ref)
 basedir = params.basedir
@@ -19,6 +21,7 @@ intervals = params.intervals
 mapfile = params.mapfile
 workspace_path = params.workspace_path
 outprefix = params.outprefix
+memfactor = params.memfactor
 
 if( !params.ref || params.ref instanceof Boolean ) error "Missing reference genome"
 if( !params.basedir || params.basedir instanceof Boolean ) error "Missing base directory path"
@@ -89,7 +92,7 @@ process get_changes {
 
 process build_database {
     publishDir "${outdir}", mode : "copy"
-    memory { 16.GB * task.attempt }
+    memory { 16.GB * task.attempt * memfactor }
     errorStrategy 'retry'
     maxRetries 2
     
@@ -155,6 +158,7 @@ process update_database {
 process genotype_GVCFs {
     publishDir "${outdir}", mode : "copy"
     memory "16G"
+    time '11d'
     
     input:
     path(database) from database_built_ch.mix(database_updated_ch)
@@ -164,6 +168,18 @@ process genotype_GVCFs {
     
     script:
     
+    if ( params.confident_ref ) {
+    """
+    gatk --java-options "-Xmx13G" GenotypeGVCFs \
+    -R ${ref} \
+    -V gendb://${database} \
+    --include-non-variant-sites \
+    -O "${outprefix}_merged_${date}.vcf.gz" \
+    --intervals ${intervals}
+    """
+    }
+    
+    else {
     """
     gatk --java-options "-Xmx13G" GenotypeGVCFs \
     -R ${ref} \
@@ -171,6 +187,7 @@ process genotype_GVCFs {
     -O "${outprefix}_merged_${date}.vcf.gz"
     
     """
+    }
 }
 
 

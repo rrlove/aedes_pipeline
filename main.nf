@@ -122,7 +122,7 @@ trimmed_reads_for_rg_ch ; trimmed_reads_for_multiqc_ch
 */
 
 process trim {
-    publishDir "${outdir}data/trimmed_reads", mode: "copy"
+    publishDir "${outdir}data/trimmed_reads"
     tag "$sample_$lane"
     //module 'trimmomatic'
 
@@ -319,7 +319,7 @@ process merge_bams {
 */
 
 process mark_dups {
-    publishDir "${outdir}data/bam", mode: "copy"
+    publishDir "${outdir}data/bam"
     tag "sample"
     //module 'gatk'
     //module 'samtools'
@@ -478,7 +478,7 @@ process call_variants{
 */
 
 process merge_gvcfs{
-    publishDir "${outdir}data/vcf", mode: "copy"
+    publishDir "${outdir}data/vcf"
     tag "$sample"
     memory "8G"
     
@@ -511,7 +511,7 @@ process merge_gvcfs{
 */
 
 process index_gvcfs{
-    publishDir "${outdir}data/vcf", mode: "copy"
+    publishDir "${outdir}data/vcf"
     tag "$sample"
     memory "8G"
     
