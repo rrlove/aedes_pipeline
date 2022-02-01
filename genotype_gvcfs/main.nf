@@ -157,7 +157,7 @@ process update_database {
 
 process genotype_GVCFs {
     publishDir "${outdir}", mode : "copy"
-    memory "16G"
+    memory { 16.GB * task.attempt * memfactor }
     time '11d'
     
     input:
