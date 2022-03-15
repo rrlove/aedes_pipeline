@@ -432,6 +432,7 @@ Channel
 
 process call_variants{
     //publishDir "${outdir}data/vcf/chunked", pattern: '*vcf*'
+    publishDir "${outdir}data/vcf"
     //publishDir "${outdir}data/bam", pattern: '*bam*'
     tag "$sample"
     //module 'gatk'
@@ -442,7 +443,8 @@ process call_variants{
     path( intervals ) from intervals_ch
 
     output:
-    file("${sample}.${intervals.simpleName}.g.vcf.gz") into genotyped_variant_chunks_ch
+    //this should be: tuple val(sample), file("${sample}.${intervals.simpleName}.g.vcf.gz") into genotyped_variant_chunks_ch
+    tuple val(sample), file("${sample}.${intervals.simpleName}.g.vcf.gz") into genotyped_variant_chunks_ch
 
     script:
     
@@ -475,7 +477,8 @@ process call_variants{
  * Tool: bash, picard
  * Input: Channel genotyped_variant_chunks_ch
  * Output: Channel merged_gvcfs_ch
-*/
+
+//modified on 02-01-2022 to take merge_gvcfs out of the pipeline, as genotyping now runs on the per-interval gVCFs
 
 process merge_gvcfs{
     publishDir "${outdir}data/vcf"
@@ -502,11 +505,12 @@ process merge_gvcfs{
     --OUTPUT !{sample}.g.vcf.gz \
     '''
 }
+*/
 
 /*
- * Index gVCF
+ * Index gVCF chunks
  * Tool: GATK
- * Input: Channel merged_gvcfs_ch
+ * Input: Channel genotyped_variant_chunks_ch
  * Output: Channel indexed_gvcfs_ch
 */
 
@@ -516,15 +520,15 @@ process index_gvcfs{
     memory "8G"
     
     input:
-    tuple val(sample), path(merged_gzvcf) from merged_gvcfs_ch
+    tuple val(sample), path("${sample}.*.g.vcf.gz") from genotyped_variant_chunks_ch
     
     output:
-    tuple val(sample), path("${sample}.g.vcf.gz.tbi") into indexed_gvcfs_ch
+    tuple val(sample), path("${sample}.*.g.vcf.gz.tbi") into indexed_gvcfs_ch
     
     script:
     """
     gatk IndexFeatureFile \
-    -I ${sample}.g.vcf.gz
+    -I ${sample}.*.g.vcf.gz
     """
 }
 
