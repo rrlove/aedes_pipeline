@@ -1,5 +1,5 @@
 /* GATK Variant Genotyping Pipeline
- * Usage: nextflow run main.nf --ref --basedir --intervals --update --mapfile --workspace_path --outprefix --lazy
+ * Usage: nextflow run main.nf --ref --basedir --intervals --mapfile --workspace_path --outprefix --memfactor --confident_ref
  *
  * Author: RRLove < rrlove@email.unc.edu >
  * University of North Carolina Chapel Hill, 2021
@@ -46,11 +46,6 @@ lazy?   :   $params.lazy
 
 """
 
-//Channel
-//    .fromPath( intervals )
-    //.view()
-//    .into{ intervals_builddb_ch; intervals_updatedb_ch }
-    
 if ( mapfile ) {
     Channel
         .fromPath( mapfile )

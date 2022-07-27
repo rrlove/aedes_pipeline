@@ -1,5 +1,5 @@
 /* GATK Variant Calling Pipeline
- * Usage: nextflow run main.nf --ref --reads --sample --basedir
+ * Usage: nextflow run main.nf --ref --reads --sample --intervals --basedir --platform --confident_ref
  *
  * Author: RRLove < rrlove@email.unc.edu >
  * University of North Carolina Chapel Hill, 2021
