@@ -3,18 +3,8 @@
  *
  * Author: RRLove < rrlove@email.unc.edu >
  * University of North Carolina Chapel Hill, 2021
-
 */
 
-/*
- * running list of packages for the conda environment:
- * fastqc
- * trimmomatic
- * bwa-mem2
- * gatk
- * picard
- * qualimap
- */
  
 //set default values for parameters
 params.sequenced = false
@@ -76,8 +66,6 @@ else {
     .into{ reads_for_qc_ch; reads_for_trimming_ch }
 }
 
-//reads_for_trimming_ch.view()
-
 /*
  * First quality check
  * Tool: fastqc
@@ -114,11 +102,11 @@ process initialQC {
 }
 
 /*
-Trim reads
-Tool: trimmomatic
-Input: Channel reads_for_trimming_ch
-Output: Channel trimmed_reads_for_qc_ch ; trimmed_reads_for_align_ch ; 
-trimmed_reads_for_rg_ch ; trimmed_reads_for_multiqc_ch
+ * Trim reads
+ * Tool: trimmomatic
+ * Input: Channel reads_for_trimming_ch
+ * Output: Channel trimmed_reads_for_qc_ch ; trimmed_reads_for_align_ch ; 
+ * trimmed_reads_for_rg_ch ; trimmed_reads_for_multiqc_ch
 */
 
 process trim {
@@ -224,32 +212,6 @@ process extract_read_groups {
     '''
     }
 
-//IFS=':' read -r -a ARRAY <<< (zcat "!{sample}_!{lane}_trimmed_*P.fq.gz" | head -n 1)
-
-
-//@RG\tID:CL1000\tLB:Library_ID\tPL:HELICOS\tSM:SAMPLE_ID\tPU:Index_seq
-//"@RG\tID:\tSM:\tPL:/tLB:\tPI:"
-
-//ID: run + flowcell barcode + lane number
-//SM: sample
-//LB: "lib-"sample
-//PL: ILLUMINA
-//PU: flowcell barcode + lane number + sample barcode
-
-//so, need to extract the run, the flowcell barcode, 
-// the lane number, and the sample barcode
-
-//in these data, these have the following fields (1-indexed):
-//run: 2
-//flowcell barcode: 3
-//lane number: 4
-//sample barcode: -1
-
-//ID: 2 + 3 + 4
-//SM: sample
-//LB: "lib-"sample
-//PL: ILLUMINA
-//PU: 3 + 2 + -1
 }
 
 /*
@@ -283,8 +245,7 @@ process align_reads {
 aligned_reads_ch
     .collect()
     .set { aligned_reads_path_ch }
-    //.view()
-    
+
 /*
  * Merge BAM files
  * Tool: samtools
@@ -313,9 +274,6 @@ process merge_bams {
  * Tool: MarkDuplicatesSpark
  * Input: Channel merged_reads_ch
  * Output: Channel bam_dups_marked_ch
-*/
-
-/* MarkDuplicates shouldn't be used with radseq data: https://gatk.broadinstitute.org/hc/en-us/community/posts/4403892377371-Difference-in-RAD-seq-and-resequencing-data-analysis
 */
 
 process mark_dups {
@@ -427,15 +385,11 @@ process picard_qc{
 
 Channel
     .fromPath( intervals )
-    //.view()
     .set{ intervals_ch }
 
 process call_variants{
-    //publishDir "${outdir}data/vcf/chunked", pattern: '*vcf*'
     publishDir "${outdir}data/vcf"
-    //publishDir "${outdir}data/bam", pattern: '*bam*'
     tag "$sample"
-    //module 'gatk'
     memory "8G"
     
     input:
@@ -443,7 +397,6 @@ process call_variants{
     path( intervals ) from intervals_ch
 
     output:
-    //this should be: tuple val(sample), file("${sample}.${intervals.simpleName}.g.vcf.gz") into genotyped_variant_chunks_ch
     tuple val(sample), file("${sample}.${intervals.simpleName}.g.vcf.gz") into genotyped_variant_chunks_ch
 
     script:
@@ -471,41 +424,6 @@ process call_variants{
     """
     }
 }
-
-/*
- * Merge gVCFs
- * Tool: bash, picard
- * Input: Channel genotyped_variant_chunks_ch
- * Output: Channel merged_gvcfs_ch
-
-//modified on 02-01-2022 to take merge_gvcfs out of the pipeline, as genotyping now runs on the per-interval gVCFs
-
-process merge_gvcfs{
-    publishDir "${outdir}data/vcf"
-    tag "$sample"
-    memory "8G"
-    
-    input:
-    file(vcfsList) from genotyped_variant_chunks_ch.toSortedList( { path -> path.getBaseName() } )
-    
-    output:
-    tuple val(sample), path("${sample}.g.vcf.gz") into merged_gvcfs_ch
-
-    shell:
-
-    '''
-    for file in !{vcfsList}
-    do
-        echo ${file} >> !{sample}_vcfs_to_merge.list
-    
-    done
-
-    picard GatherVcfs \
-    --INPUT !{sample}_vcfs_to_merge.list \
-    --OUTPUT !{sample}.g.vcf.gz \
-    '''
-}
-*/
 
 /*
  * Index gVCF chunks
@@ -567,7 +485,3 @@ process multiqc{
     """
     
 }
-
-//make output not modifiable
-//validate choice of trimmomatic parameters
-//find good heterozygosity parameters for HaplotypeCaller
