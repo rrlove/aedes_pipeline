@@ -1,0 +1,35 @@
+#!/bin/bash
+
+#SBATCH -N 1
+#SBATCH -t 10-00:00:00
+#SBATCH --array=1-12%4
+
+##aligning and genotyping the second batch of specimens from Colombia
+
+source activate varaedes
+
+##aedes_path is the base directory for the project
+##data_path holds the raw reads
+
+cd ${aedes_path}data/output/
+
+##Colombia_batch_2.090621.txt contains a list of specinem names, one per line
+mapfile -t sample_list <${aedes_path}data/Colombia_batch_2.090621.txt
+
+sample=${sample_list[${SLURM_ARRAY_TASK_ID}-1]}
+
+if [ ! -d ${sample}_dir ]; then
+  mkdir ${sample}_dir
+fi
+
+cd ${sample}_dir/
+
+nextflow ${aedes_path}pipeline/main.nf \
+--ref "${aedes_path}refs/aegy/VectorBase-50_AaegyptiLVP_AGWG_Genome.fasta" \
+--reads "${data_path}${sample}*" \
+--sample "${sample}" \
+--intervals "${aedes_path}refs/aegy/intervals/*.list" \
+--basedir "${aedes_path}data/output/${sample}_dir/" \
+--sequenced \
+--confident_ref
+
